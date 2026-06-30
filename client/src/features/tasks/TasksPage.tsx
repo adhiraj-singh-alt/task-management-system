@@ -21,6 +21,7 @@ const INITIAL: TaskListParams = {
   status: "",
   priority: "",
   categoryId: "",
+  assignedToId: "",
   parentId: "null", // top-level tasks only; subtasks come nested per row
   page: 1,
   limit: 10,
@@ -84,8 +85,13 @@ export function TasksPage() {
   const data = tasksQuery.data;
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / params.limit));
-  const hasFilters =
-    Boolean(params.search || params.status || params.priority || params.categoryId);
+  const hasFilters = Boolean(
+    params.search ||
+      params.status ||
+      params.priority ||
+      params.categoryId ||
+      params.assignedToId,
+  );
 
   return (
     <div className="space-y-6">

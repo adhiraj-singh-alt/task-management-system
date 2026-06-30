@@ -11,6 +11,8 @@ export const createTaskSchema = z.object({
   priority: z.enum(TaskPriority).optional(),
   dueDate: z.coerce.date().optional(),
   categoryId: z.uuid().optional(),
+  // null (or omitted) → unassigned; a uuid assigns the task to that user.
+  assignedToId: z.uuid().nullable().optional(),
   // null (or omitted) → a top-level task; a uuid nests it under that parent.
   parentId: z.uuid().nullable().optional(),
   tagIds: z.array(z.uuid()).optional(),
@@ -26,6 +28,7 @@ export const listTasksQuerySchema = paginationSchema.extend({
   status: z.enum(TaskStatus).optional(),
   priority: z.enum(TaskPriority).optional(),
   categoryId: z.uuid().optional(),
+  assignedToId: z.uuid().optional(), // filter to tasks assigned to this user
   // "null" → top-level tasks only; a uuid → children of that task.
   parentId: z.union([z.literal("null"), z.uuid()]).optional(),
   tag: z.uuid().optional(), // filter by a tag id

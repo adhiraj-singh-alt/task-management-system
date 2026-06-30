@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type {
+  AssignableUser,
   Category,
   Paginated,
   Tag,
@@ -19,6 +20,8 @@ export interface TaskListParams {
   status: TaskStatus | "";
   priority: TaskPriority | "";
   categoryId: string;
+  // A uuid → tasks assigned to that user; "" → no filter.
+  assignedToId?: string;
   // "null" → top-level only; a uuid → children of that task; "" → no filter.
   parentId?: string;
   page: number;
@@ -39,6 +42,7 @@ function toQuery(params: TaskListParams): Record<string, string | number> {
   if (params.status) q.status = params.status;
   if (params.priority) q.priority = params.priority;
   if (params.categoryId) q.categoryId = params.categoryId;
+  if (params.assignedToId) q.assignedToId = params.assignedToId;
   if (params.parentId) q.parentId = params.parentId;
   return q;
 }
@@ -77,6 +81,7 @@ export interface TaskInput {
   priority?: TaskPriority;
   dueDate?: string;
   categoryId?: string;
+  assignedToId?: string | null; // uuid to assign to a user; null to unassign.
   tagIds?: string[];
   parentId?: string | null; // uuid to nest under a parent; null to detach.
   metadata?: Record<string, string>; // ad-hoc custom fields stored as JSONB on the task.
@@ -121,6 +126,17 @@ export function useTags() {
   return useQuery({
     queryKey: ["tags"],
     queryFn: () => api.get<{ tags: Tag[] }>("/tags").then((r) => r.data.tags),
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** Users available to assign a task to. Only fetched while a form is open. */
+export function useAssignableUsers(enabled: boolean) {
+  return useQuery({
+    queryKey: ["users", "assignable"],
+    queryFn: () =>
+      api.get<{ users: AssignableUser[] }>("/users/assignable").then((r) => r.data.users),
+    enabled,
     staleTime: 5 * 60_000,
   });
 }

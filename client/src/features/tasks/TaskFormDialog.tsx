@@ -7,7 +7,14 @@ import { toast } from "sonner";
 import type { Category, Tag, Task } from "@/lib/types";
 import { apiErrorMessage } from "@/lib/api";
 import { PRIORITY_OPTIONS, STATUS_OPTIONS } from "./constants";
-import { useCreateTask, useTaskOptions, useUpdateTask, type TaskInput } from "./hooks";
+import {
+  useAssignableUsers,
+  useCreateTask,
+  useTaskOptions,
+  useUpdateTask,
+  type TaskInput,
+} from "./hooks";
+import { useAuth } from "@/features/auth/useAuth";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,6 +45,7 @@ const formSchema = z.object({
   priority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]),
   dueDate: z.string().optional(),
   categoryId: z.string().optional(),
+  assignedToId: z.string().optional(),
   parentId: z.string().optional(),
 });
 
@@ -65,6 +73,12 @@ export function TaskFormDialog({
   const isSubtaskCreate = !isEdit && Boolean(defaultParentId);
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
+  const { user } = useAuth();
+
+  // Only the task's owner (or an ADMIN) may assign it. On create, the acting
+  // user is always the owner. Assignees editing someone else's task can't reassign.
+  const canAssign = !isEdit || user?.role === "ADMIN" || task?.userId === user?.id;
+  const assignableUsers = useAssignableUsers(open && canAssign);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   // Ad-hoc custom fields, persisted to task.metadata. Kept as ordered rows
   // (not react-hook-form) because the keys themselves are user-defined.
@@ -89,6 +103,7 @@ export function TaskFormDialog({
       priority: task?.priority ?? "MEDIUM",
       dueDate: task?.dueDate ? task.dueDate.slice(0, 10) : "",
       categoryId: task?.categoryId ?? "",
+      assignedToId: task?.assignedToId ?? "",
       parentId: task?.parentId ?? defaultParentId ?? "",
     });
     setSelectedTags(task?.tags.map((t) => t.id) ?? []);
@@ -112,6 +127,8 @@ export function TaskFormDialog({
     if (values.description) input.description = values.description;
     if (values.dueDate) input.dueDate = values.dueDate;
     if (values.categoryId) input.categoryId = values.categoryId;
+    // Only owners/admins may (re)assign; send the chosen user, or null to unassign.
+    if (canAssign) input.assignedToId = values.assignedToId ? values.assignedToId : null;
     // Only manage parentId when reparenting is possible: send the chosen id,
     // or null to detach. Skip entirely for tasks that already have children.
     if (!hasChildren) input.parentId = values.parentId ? values.parentId : null;
@@ -263,6 +280,35 @@ export function TaskFormDialog({
               />
             </div>
           </div>
+
+          {canAssign && (
+            <div className="space-y-2">
+              <Label>Assignee</Label>
+              <Controller
+                control={control}
+                name="assignedToId"
+                render={({ field }) => (
+                  <Select
+                    value={field.value || NONE}
+                    onValueChange={(v) => field.onChange(v === NONE ? "" : v)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Unassigned" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NONE}>Unassigned</SelectItem>
+                      {(assignableUsers.data ?? []).map((u) => (
+                        <SelectItem key={u.id} value={u.id}>
+                          {u.name}
+                          {u.id === user?.id ? " (me)" : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </div>
+          )}
 
           {!hasChildren && (
             <div className="space-y-2">

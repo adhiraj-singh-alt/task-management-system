@@ -31,6 +31,7 @@ export const ERROR_CODES = {
   TASK_NOT_FOUND: "TASK_NOT_FOUND",
   CATEGORY_NOT_FOUND: "CATEGORY_NOT_FOUND",
   TAG_NOT_FOUND: "TAG_NOT_FOUND",
+  ASSIGNEE_NOT_FOUND: "ASSIGNEE_NOT_FOUND",
   PARENT_TASK_NOT_FOUND: "PARENT_TASK_NOT_FOUND",
   SUBTASK_NESTING_NOT_ALLOWED: "SUBTASK_NESTING_NOT_ALLOWED",
 } as const;
@@ -54,6 +55,7 @@ export const ERROR_MESSAGES = {
   TASK_NOT_FOUND: "Task not found",
   CATEGORY_NOT_FOUND: "Category not found",
   TAG_NOT_FOUND: "Tag not found",
+  ASSIGNEE_NOT_FOUND: "Assignee not found",
   PARENT_TASK_NOT_FOUND: "Parent task not found",
   SUBTASK_NESTING_NOT_ALLOWED: "Subtasks can only be nested one level deep",
 } as const;

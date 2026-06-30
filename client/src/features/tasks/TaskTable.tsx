@@ -107,6 +107,7 @@ export function TaskTable({ tasks, onEdit, onDelete, onAddSubtask, onView }: Pro
             <TableHead>Status</TableHead>
             <TableHead>Priority</TableHead>
             <TableHead>Category</TableHead>
+            <TableHead>Assignee</TableHead>
             <TableHead>Due</TableHead>
             <TableHead className="w-10" />
           </TableRow>
@@ -248,6 +249,13 @@ function TaskRow({
             )}
             {task.category.name}
           </span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
+      <TableCell>
+        {task.assignedTo ? (
+          task.assignedTo.name
         ) : (
           <span className="text-muted-foreground">—</span>
         )}

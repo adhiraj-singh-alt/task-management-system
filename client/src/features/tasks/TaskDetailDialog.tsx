@@ -133,6 +133,13 @@ export function TaskDetailDialog({
                 <span className="text-muted-foreground">—</span>
               )}
             </MetaRow>
+            <MetaRow label="Assignee">
+              {task.assignedTo ? (
+                task.assignedTo.name
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
+            </MetaRow>
             <MetaRow label="Tags">
               {task.tags.length > 0 ? (
                 <div className="flex flex-wrap gap-1">

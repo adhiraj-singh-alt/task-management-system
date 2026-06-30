@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, Search } from "lucide-react";
 import type { Category, TaskPriority, TaskStatus } from "@/lib/types";
 import type { TaskListParams } from "./hooks";
 import { PRIORITY_OPTIONS, STATUS_OPTIONS } from "./constants";
+import { useAuth } from "@/features/auth/useAuth";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +30,8 @@ export function TaskFilters({
   onPatch,
   categories,
 }: Props) {
+  const { user } = useAuth();
+  const ASSIGNED_ME = "me";
   return (
     <div className="flex flex-wrap items-center gap-2">
       <div className="relative min-w-[200px] flex-1">
@@ -95,6 +98,23 @@ export function TaskFilters({
           ))}
         </SelectContent>
       </Select>
+
+      {user && (
+        <Select
+          value={params.assignedToId === user.id ? ASSIGNED_ME : ALL}
+          onValueChange={(v) =>
+            onPatch({ assignedToId: v === ASSIGNED_ME ? user.id : "", page: 1 })
+          }
+        >
+          <SelectTrigger className="w-[160px]">
+            <SelectValue placeholder="Assignee" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>Anyone</SelectItem>
+            <SelectItem value={ASSIGNED_ME}>Assigned to me</SelectItem>
+          </SelectContent>
+        </Select>
+      )}
 
       <Select
         value={params.sortBy}

@@ -12,6 +12,9 @@ export interface User {
   createdAt: string;
 }
 
+/** Minimal user shape from `GET /users/assignable` (the assignee picker). */
+export type AssignableUser = Pick<User, "id" | "name" | "email">;
+
 export interface Category {
   id: string;
   userId: string;
@@ -44,6 +47,8 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   category: Pick<Category, "id" | "name" | "color"> | null;
+  // Present on top-level tasks; omitted on nested subtasks (leaves carry only the id).
+  assignedTo?: AssignableUser | null;
   tags: Pick<Tag, "id" | "name">[];
   // Present on top-level tasks; absent on nested subtasks (which are leaves).
   subtasks?: Task[];

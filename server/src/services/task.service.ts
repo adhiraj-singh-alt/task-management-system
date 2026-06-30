@@ -2,7 +2,7 @@ import type { Prisma, Role } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { AppError } from "../utils/AppError.js";
 import { ERROR_CODES, ERROR_MESSAGES } from "../constants/errors.js";
-import { ownerScope } from "../utils/ownership.js";
+import { ownerScope, taskAccessScope } from "../utils/ownership.js";
 import { invalidateTasks, readThroughItem, readThroughList } from "./taskCache.js";
 import type {
   CreateTaskInput,
@@ -21,6 +21,7 @@ const subtaskInclude = {
 
 const taskInclude = {
   category: { select: { id: true, name: true, color: true } },
+  assignedTo: { select: { id: true, name: true, email: true } },
   tags: { select: { tag: { select: { id: true, name: true } } } },
   subtasks: { orderBy: { createdAt: "asc" }, include: subtaskInclude },
 } satisfies Prisma.TaskInclude;
@@ -57,6 +58,16 @@ async function assertCategoryExists(categoryId: string): Promise<void> {
   });
   if (!found) {
     throw AppError.notFound(ERROR_MESSAGES.CATEGORY_NOT_FOUND, ERROR_CODES.CATEGORY_NOT_FOUND);
+  }
+}
+
+async function assertAssigneeExists(assignedToId: string): Promise<void> {
+  const found = await prisma.user.findUnique({
+    where: { id: assignedToId },
+    select: { id: true },
+  });
+  if (!found) {
+    throw AppError.notFound(ERROR_MESSAGES.ASSIGNEE_NOT_FOUND, ERROR_CODES.ASSIGNEE_NOT_FOUND);
   }
 }
 
@@ -106,10 +117,13 @@ export async function list(user: AuthUser, q: ListTasksQuery) {
 
 async function listFromDb(user: AuthUser, q: ListTasksQuery) {
   const where: Prisma.TaskWhereInput = {
-    ...ownerScope(user),
+    // Owner OR assignee (USER) / everything (ADMIN). Wrapped in AND so it
+    // doesn't collide with the search `OR` clause below.
+    AND: [taskAccessScope(user)],
     ...(q.status ? { status: q.status } : {}),
     ...(q.priority ? { priority: q.priority } : {}),
     ...(q.categoryId ? { categoryId: q.categoryId } : {}),
+    ...(q.assignedToId ? { assignedToId: q.assignedToId } : {}),
     ...(q.parentId === "null"
       ? { parentId: null }
       : q.parentId
@@ -154,7 +168,7 @@ export async function getById(user: AuthUser, id: string) {
 
 async function getByIdFromDb(user: AuthUser, id: string) {
   const task = await prisma.task.findFirst({
-    where: { id, ...ownerScope(user) },
+    where: { id, AND: [taskAccessScope(user)] },
     include: taskInclude,
   });
   if (!task) {
@@ -166,6 +180,7 @@ async function getByIdFromDb(user: AuthUser, id: string) {
 export async function create(user: AuthUser, input: CreateTaskInput) {
   const ownerId = user.id; // tasks are created under the acting user
   if (input.categoryId) await assertCategoryExists(input.categoryId);
+  if (input.assignedToId) await assertAssigneeExists(input.assignedToId);
   if (input.parentId) await assertParentOwned(ownerId, input.parentId);
   if (input.tagIds?.length) await assertTagsExist(input.tagIds);
 
@@ -178,6 +193,7 @@ export async function create(user: AuthUser, input: CreateTaskInput) {
     ...(input.dueDate ? { dueDate: input.dueDate } : {}),
     ...(input.status === "DONE" ? { completedAt: new Date() } : {}),
     ...(input.categoryId ? { categoryId: input.categoryId } : {}),
+    ...(input.assignedToId ? { assignedToId: input.assignedToId } : {}),
     ...(input.parentId ? { parentId: input.parentId } : {}),
     ...(input.metadata ? { metadata: input.metadata as Prisma.InputJsonValue } : {}),
     ...(input.tagIds?.length
@@ -186,18 +202,27 @@ export async function create(user: AuthUser, input: CreateTaskInput) {
   };
 
   const task = await prisma.task.create({ data, include: taskInclude });
-  await invalidateTasks(ownerId);
+  await invalidateTasks(ownerId, input.assignedToId);
   return serializeTask(task);
 }
 
 export async function update(user: AuthUser, id: string, input: UpdateTaskInput) {
+  // Owner, assignee, or ADMIN may reach a task for a general update.
   const existing = await prisma.task.findFirst({
-    where: { id, ...ownerScope(user) },
-    select: { id: true, userId: true },
+    where: { id, AND: [taskAccessScope(user)] },
+    select: { id: true, userId: true, assignedToId: true },
   });
   if (!existing) {
     throw AppError.notFound(ERROR_MESSAGES.TASK_NOT_FOUND, ERROR_CODES.TASK_NOT_FOUND);
   }
+
+  // Reassigning is owner/admin only — an assignee can edit the task but not
+  // hand it to someone else.
+  const isOwnerOrAdmin = user.role === "ADMIN" || existing.userId === user.id;
+  if (input.assignedToId !== undefined && !isOwnerOrAdmin) {
+    throw AppError.forbidden(ERROR_MESSAGES.FORBIDDEN, ERROR_CODES.FORBIDDEN);
+  }
+  if (input.assignedToId) await assertAssigneeExists(input.assignedToId);
 
   // Referenced resources must belong to the task's owner (not necessarily the
   // acting user, since an ADMIN may edit someone else's task).
@@ -222,6 +247,7 @@ export async function update(user: AuthUser, id: string, input: UpdateTaskInput)
     ...(input.priority !== undefined ? { priority: input.priority } : {}),
     ...(input.dueDate !== undefined ? { dueDate: input.dueDate } : {}),
     ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
+    ...(input.assignedToId !== undefined ? { assignedToId: input.assignedToId } : {}),
     ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
     ...(input.metadata !== undefined
       ? { metadata: input.metadata as Prisma.InputJsonValue }
@@ -237,18 +263,20 @@ export async function update(user: AuthUser, id: string, input: UpdateTaskInput)
   };
 
   const task = await prisma.task.update({ where: { id }, data, include: taskInclude });
-  await invalidateTasks(ownerId);
+  // Invalidate the owner, the previous assignee, and (if reassigned) the new one.
+  await invalidateTasks(ownerId, existing.assignedToId, task.assignedToId);
   return serializeTask(task);
 }
 
 export async function remove(user: AuthUser, id: string): Promise<void> {
+  // Deleting is owner/admin only (stricter than the general-update scope).
   const existing = await prisma.task.findFirst({
     where: { id, ...ownerScope(user) },
-    select: { id: true, userId: true },
+    select: { id: true, userId: true, assignedToId: true },
   });
   if (!existing) {
     throw AppError.notFound(ERROR_MESSAGES.TASK_NOT_FOUND, ERROR_CODES.TASK_NOT_FOUND);
   }
   await prisma.task.delete({ where: { id } });
-  await invalidateTasks(existing.userId);
+  await invalidateTasks(existing.userId, existing.assignedToId);
 }

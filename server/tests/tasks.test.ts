@@ -2,17 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 import { createApp } from "../src/app.js";
 import { prisma } from "../src/lib/prisma.js";
-import {
-  AUTH_PATH,
-  TASKS_PATH,
-  CATEGORIES_PATH,
-  TAGS_PATH,
-  USERS_PATH,
-} from "../src/constants/routes.js";
+import { AUTH_PATH, TASKS_PATH, USERS_PATH } from "../src/constants/routes.js";
 
 /**
- * Integration tests for RBAC + Tasks/Categories/Tags CRUD. Hits the real DB,
- * creating uniquely-named users and cleaning them up after. `pnpm test`.
+ * Integration tests for RBAC + Tasks CRUD (with shared category/tag links).
+ * Hits the real DB, creating uniquely-named users and cleaning them up after.
+ * Categories & tags are a read-only catalogue, so they're seeded directly via
+ * Prisma rather than created over the (now removed) write endpoints. `pnpm test`.
  */
 
 const app = createApp();
@@ -21,6 +17,7 @@ const password = "password123";
 const emailPrefix = `vitest_tasks_${runId}`;
 const emailA = `${emailPrefix}_a@example.com`;
 const emailB = `${emailPrefix}_b@example.com`;
+const emailC = `${emailPrefix}_c@example.com`;
 const emailAdmin = `${emailPrefix}_admin@example.com`;
 
 // Categories & tags are a shared, global catalogue. Names must be unique across
@@ -30,7 +27,11 @@ const tagName = `urgent-${runId}`;
 
 let tokenA = "";
 let tokenB = "";
+let tokenC = "";
 let tokenAdmin = "";
+let userBId = "";
+let categoryId = "";
+let tagId = "";
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -47,12 +48,19 @@ beforeAll(async () => {
 
   tokenA = await registerUser(emailA);
   tokenB = await registerUser(emailB);
+  tokenC = await registerUser(emailC);
+  userBId = (await prisma.user.findUniqueOrThrow({ where: { email: emailB } })).id;
 
   // Register, promote to ADMIN, then re-login so the access token carries ADMIN.
   await registerUser(emailAdmin);
   await prisma.user.update({ where: { email: emailAdmin }, data: { role: "ADMIN" } });
   const login = await request(app).post(`${AUTH_PATH}/login`).send({ email: emailAdmin, password });
   tokenAdmin = login.body.accessToken;
+
+  // Categories & tags are a read-only catalogue with no write endpoints; seed
+  // the run-scoped rows these tests reference directly via Prisma.
+  categoryId = (await prisma.category.create({ data: { name: catName, color: "#3b82f6" } })).id;
+  tagId = (await prisma.tag.create({ data: { name: tagName } })).id;
 });
 
 afterAll(async () => {
@@ -65,52 +73,7 @@ afterAll(async () => {
 });
 
 describe("tasks + categories + tags + RBAC", () => {
-  let categoryId = "";
-  let tagId = "";
   let taskId = "";
-
-  it("creates a category as ADMIN (201)", async () => {
-    const res = await request(app)
-      .post(CATEGORIES_PATH)
-      .set(auth(tokenAdmin))
-      .send({ name: catName, color: "#3b82f6" });
-
-    expect(res.status).toBe(201);
-    expect(res.body.category).toMatchObject({ name: catName, color: "#3b82f6" });
-    categoryId = res.body.category.id;
-  });
-
-  it("forbids a USER from creating a category (403)", async () => {
-    const res = await request(app)
-      .post(CATEGORIES_PATH)
-      .set(auth(tokenA))
-      .send({ name: `${catName}-user` });
-    expect(res.status).toBe(403);
-    expect(res.body.error.code).toBe("FORBIDDEN");
-  });
-
-  it("rejects a duplicate category name (409)", async () => {
-    const res = await request(app)
-      .post(CATEGORIES_PATH)
-      .set(auth(tokenAdmin))
-      .send({ name: catName });
-    expect(res.status).toBe(409);
-  });
-
-  it("creates a tag as ADMIN (201)", async () => {
-    const res = await request(app).post(TAGS_PATH).set(auth(tokenAdmin)).send({ name: tagName });
-    expect(res.status).toBe(201);
-    tagId = res.body.tag.id;
-  });
-
-  it("forbids a USER from creating a tag (403)", async () => {
-    const res = await request(app)
-      .post(TAGS_PATH)
-      .set(auth(tokenA))
-      .send({ name: `${tagName}-user` });
-    expect(res.status).toBe(403);
-    expect(res.body.error.code).toBe("FORBIDDEN");
-  });
 
   it("creates a task linking the category + tag (201)", async () => {
     const res = await request(app)
@@ -228,6 +191,103 @@ describe("tasks + categories + tags + RBAC", () => {
 
     const refetch = await request(app).get(`${TASKS_PATH}/${taskId}`).set(auth(tokenA));
     expect(refetch.status).toBe(404);
+  });
+});
+
+describe("task assignment", () => {
+  // A owns these tasks; B is the assignee; C is an unrelated user.
+  let assignedTaskId = "";
+
+  it("lists assignable users for any authenticated USER (200)", async () => {
+    const res = await request(app).get(`${USERS_PATH}/assignable`).set(auth(tokenA));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.users)).toBe(true);
+    const me = res.body.users.find((u: { email: string }) => u.email === emailB);
+    expect(me).toMatchObject({ id: userBId, email: emailB });
+    // Narrow projection — no role/passwordHash leaked.
+    expect(me).not.toHaveProperty("role");
+    expect(me).not.toHaveProperty("passwordHash");
+  });
+
+  it("lets the owner assign a task to another user (201)", async () => {
+    const res = await request(app)
+      .post(TASKS_PATH)
+      .set(auth(tokenA))
+      .send({ title: "Assign to B", assignedToId: userBId });
+    expect(res.status).toBe(201);
+    expect(res.body.task.assignedToId).toBe(userBId);
+    expect(res.body.task.assignedTo).toMatchObject({ id: userBId, email: emailB });
+    assignedTaskId = res.body.task.id;
+  });
+
+  it("rejects assigning to a non-existent user (404)", async () => {
+    const res = await request(app)
+      .post(TASKS_PATH)
+      .set(auth(tokenA))
+      .send({ title: "Bad assignee", assignedToId: "11111111-1111-4111-8111-111111111111" });
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("ASSIGNEE_NOT_FOUND");
+  });
+
+  it("shows the assigned task to the assignee in list + get (200)", async () => {
+    const list = await request(app)
+      .get(`${TASKS_PATH}?assignedToId=${userBId}`)
+      .set(auth(tokenB));
+    expect(list.status).toBe(200);
+    expect(list.body.items.some((t: { id: string }) => t.id === assignedTaskId)).toBe(true);
+
+    const get = await request(app).get(`${TASKS_PATH}/${assignedTaskId}`).set(auth(tokenB));
+    expect(get.status).toBe(200);
+    expect(get.body.task.id).toBe(assignedTaskId);
+  });
+
+  it("lets the assignee update the task's status (200)", async () => {
+    const res = await request(app)
+      .patch(`${TASKS_PATH}/${assignedTaskId}`)
+      .set(auth(tokenB))
+      .send({ status: "DONE" });
+    expect(res.status).toBe(200);
+    expect(res.body.task.status).toBe("DONE");
+  });
+
+  it("forbids the assignee from reassigning the task (403)", async () => {
+    const res = await request(app)
+      .patch(`${TASKS_PATH}/${assignedTaskId}`)
+      .set(auth(tokenB))
+      .send({ assignedToId: userBId });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("forbids the assignee from deleting the task (404, owner-only)", async () => {
+    const res = await request(app).delete(`${TASKS_PATH}/${assignedTaskId}`).set(auth(tokenB));
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("TASK_NOT_FOUND");
+  });
+
+  it("hides the task from an unrelated user (404)", async () => {
+    const res = await request(app).get(`${TASKS_PATH}/${assignedTaskId}`).set(auth(tokenC));
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("TASK_NOT_FOUND");
+  });
+
+  it("lets the owner clear the assignee with null (200)", async () => {
+    const res = await request(app)
+      .patch(`${TASKS_PATH}/${assignedTaskId}`)
+      .set(auth(tokenA))
+      .send({ assignedToId: null });
+    expect(res.status).toBe(200);
+    expect(res.body.task.assignedToId).toBeNull();
+    expect(res.body.task.assignedTo).toBeNull();
+
+    // Now B no longer sees it.
+    const get = await request(app).get(`${TASKS_PATH}/${assignedTaskId}`).set(auth(tokenB));
+    expect(get.status).toBe(404);
+  });
+
+  it("forbids assignable list without auth (401)", async () => {
+    const res = await request(app).get(`${USERS_PATH}/assignable`);
+    expect(res.status).toBe(401);
   });
 });
 

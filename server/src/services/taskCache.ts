@@ -74,14 +74,20 @@ export async function readThroughItem<T>(
 }
 
 /**
- * Invalidate every cached task read affected by a mutation: bump the owner's
- * per-user namespace AND the global namespace (so admin views invalidate too).
- * Best-effort — never throws, so it can't fail the mutation that triggered it.
+ * Invalidate every cached task read affected by a mutation: bump the global
+ * namespace (so admin views invalidate too) plus the per-user namespace of each
+ * affected user. A task appears in both its owner's and its assignee's per-user
+ * cache, so pass both — and on reassignment, the previous assignee as well.
+ * Null/undefined/duplicate ids are ignored. Best-effort — never throws, so it
+ * can't fail the mutation that triggered it.
  */
-export async function invalidateTasks(ownerId: string): Promise<void> {
+export async function invalidateTasks(
+  ...userIds: (string | null | undefined)[]
+): Promise<void> {
+  const unique = [...new Set(userIds.filter((id): id is string => Boolean(id)))];
   await Promise.allSettled([
-    bumpVersion(userVersionNs(ownerId)),
     bumpVersion(GLOBAL_VERSION_NS),
+    ...unique.map((id) => bumpVersion(userVersionNs(id))),
   ]);
 }
 
