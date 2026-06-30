@@ -1,0 +1,165 @@
+// TaskFlow — Prisma schema
+// Data model: each user owns their own tasks and refresh tokens. Categories and
+// tags are a shared, global catalogue (no per-user ownership; ADMIN-only writes).
+// The ADMIN role has global access to tasks and manages the shared catalogue.
+//
+// Convention: model fields stay camelCase (idiomatic TypeScript), while physical
+// tables/columns are snake_case via @@map / @map.
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  ARCHIVED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tasks         Task[]         @relation("TaskOwner")
+  assignedTasks Task[]         @relation("TaskAssignee")
+  refreshTokens RefreshToken[]
+  auditLogs     audit_logs[]
+
+  @@map("users")
+}
+
+// Hashed, rotatable, revocable refresh tokens (raw token is never stored).
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// Shared across all users: categories are a global catalogue, not owned per-user.
+// Only ADMINs can create/edit/delete them (enforced at the route layer).
+model Category {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  color     String? // hex color, e.g. "#3b82f6"
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tasks Task[]
+
+  @@map("categories")
+}
+
+// Shared across all users: tags are a global catalogue (see Category).
+model Tag {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tasks TaskTag[]
+
+  @@map("tags")
+}
+
+model Task {
+  id           String       @id @default(uuid()) @db.Uuid
+  userId       String       @map("user_id") @db.Uuid
+  assignedToId String?      @map("assigned_to_id") @db.Uuid
+  parentId     String?      @map("parent_id") @db.Uuid
+  categoryId   String?      @map("category_id") @db.Uuid
+  title        String
+  description String?
+  status      TaskStatus   @default(TODO)
+  priority    TaskPriority @default(MEDIUM)
+  dueDate     DateTime?    @map("due_date")
+  completedAt DateTime?    @map("completed_at")
+  // Flexible, arbitrary structured data without schema changes.
+  metadata    Json         @default("{}") @db.JsonB
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  user       User      @relation("TaskOwner", fields: [userId], references: [id], onDelete: Cascade)
+  assignedTo User?     @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  parent     Task?     @relation("Subtasks", fields: [parentId], references: [id], onDelete: Cascade)
+  subtasks   Task[]    @relation("Subtasks")
+  tags       TaskTag[]
+  auditLogs  audit_logs[]
+
+  @@index([userId, status])
+  @@index([userId, dueDate])
+  @@index([assignedToId])
+  @@index([parentId])
+  @@index([categoryId])
+  // Fast containment queries on the JSONB metadata column.
+  @@index([metadata(ops: JsonbOps)], type: Gin)
+  @@map("tasks")
+}
+
+// Explicit many-to-many join between Task and Tag (gives us control over
+// indexing and room to add columns later).
+model TaskTag {
+  taskId String @map("task_id") @db.Uuid
+  tagId  String @map("tag_id") @db.Uuid
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, tagId])
+  @@index([tagId])
+  @@map("task_tags")
+}
+
+
+model audit_logs {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  taskId    String?  @map("task_id") @db.Uuid
+  action    String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("audit_logs")
+}
