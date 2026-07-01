@@ -34,6 +34,7 @@ export const ERROR_CODES = {
   ASSIGNEE_NOT_FOUND: "ASSIGNEE_NOT_FOUND",
   PARENT_TASK_NOT_FOUND: "PARENT_TASK_NOT_FOUND",
   SUBTASK_NESTING_NOT_ALLOWED: "SUBTASK_NESTING_NOT_ALLOWED",
+  TASK_VERSION_CONFLICT: "TASK_VERSION_CONFLICT",
 } as const;
 
 export const ERROR_MESSAGES = {
@@ -58,4 +59,6 @@ export const ERROR_MESSAGES = {
   ASSIGNEE_NOT_FOUND: "Assignee not found",
   PARENT_TASK_NOT_FOUND: "Parent task not found",
   SUBTASK_NESTING_NOT_ALLOWED: "Subtasks can only be nested one level deep",
+  TASK_VERSION_CONFLICT:
+    "This task was modified by someone else. Reload it and try again.",
 } as const;

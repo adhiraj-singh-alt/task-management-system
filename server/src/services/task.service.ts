@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { AppError } from "../utils/AppError.js";
 import { ERROR_CODES, ERROR_MESSAGES } from "../constants/errors.js";
 import { ownerScope, taskAccessScope } from "../utils/ownership.js";
-import { invalidateTasks, readThroughItem, readThroughList } from "./taskCache.js";
+import { invalidateTasks, readThroughList } from "./taskCache.js";
 import type {
   CreateTaskInput,
   UpdateTaskInput,
@@ -163,10 +163,6 @@ async function listFromDb(user: AuthUser, q: ListTasksQuery) {
 }
 
 export async function getById(user: AuthUser, id: string) {
-  return readThroughItem(user, id, () => getByIdFromDb(user, id));
-}
-
-async function getByIdFromDb(user: AuthUser, id: string) {
   const task = await prisma.task.findFirst({
     where: { id, AND: [taskAccessScope(user)] },
     include: taskInclude,
@@ -241,7 +237,7 @@ export async function update(user: AuthUser, id: string, input: UpdateTaskInput)
   }
   if (input.tagIds?.length) await assertTagsExist(input.tagIds);
 
-  const data: Prisma.TaskUncheckedUpdateInput = {
+  const data: Prisma.TaskUncheckedUpdateManyInput = {
     ...(input.title !== undefined ? { title: input.title } : {}),
     ...(input.description !== undefined ? { description: input.description } : {}),
     ...(input.priority !== undefined ? { priority: input.priority } : {}),
@@ -256,13 +252,39 @@ export async function update(user: AuthUser, id: string, input: UpdateTaskInput)
     ...(input.status !== undefined
       ? { status: input.status, completedAt: input.status === "DONE" ? new Date() : null }
       : {}),
-    // Replacing tags rewrites the join rows atomically within this update.
-    ...(input.tagIds !== undefined
-      ? { tags: { deleteMany: {}, create: input.tagIds.map((tagId) => ({ tagId })) } }
-      : {}),
+    // Optimistic-lock bump: every accepted update advances the version.
+    version: { increment: 1 },
   };
 
-  const task = await prisma.task.update({ where: { id }, data, include: taskInclude });
+  // Compare-and-set on version, wrapped in an interactive transaction so the tag
+  // rewrite is atomic with the guarded update. Prisma's `update` where clause
+  // only accepts unique fields, so the version guard uses `updateMany` (arbitrary
+  // filter + affected-row count) instead.
+  const task = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.task.updateMany({
+      where: { id, version: input.version },
+      data,
+    });
+    if (count === 0) {
+      // The row exists and is accessible (checked above), so a zero count means
+      // another write advanced the version between the client's read and now.
+      throw AppError.conflict(
+        ERROR_MESSAGES.TASK_VERSION_CONFLICT,
+        ERROR_CODES.TASK_VERSION_CONFLICT,
+      );
+    }
+    // Replacing tags rewrites the join rows (updateMany can't nest writes).
+    if (input.tagIds !== undefined) {
+      await tx.taskTag.deleteMany({ where: { taskId: id } });
+      if (input.tagIds.length) {
+        await tx.taskTag.createMany({
+          data: input.tagIds.map((tagId) => ({ taskId: id, tagId })),
+        });
+      }
+    }
+    return tx.task.findUniqueOrThrow({ where: { id }, include: taskInclude });
+  });
+
   // Invalidate the owner, the previous assignee, and (if reassigned) the new one.
   await invalidateTasks(ownerId, existing.assignedToId, task.assignedToId);
   return serializeTask(task);

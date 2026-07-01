@@ -101,3 +101,11 @@ export function apiErrorMessage(error: unknown, fallback = "Something went wrong
   }
   return fallback;
 }
+
+/** Extract the stable error `code` from an axios error, if present. */
+export function apiErrorCode(error: unknown): string | undefined {
+  if (axios.isAxiosError(error)) {
+    return (error as AxiosError<ApiError>).response?.data?.error?.code;
+  }
+  return undefined;
+}

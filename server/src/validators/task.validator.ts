@@ -22,6 +22,9 @@ export const createTaskSchema = z.object({
 export const updateTaskSchema = createTaskSchema.partial().extend({
   // null clears the parent (promotes a subtask back to top-level); a uuid re-parents it.
   parentId: z.uuid().nullable().optional(),
+  // Optimistic-lock guard: the version the client last read. Required so a stale
+  // client can't silently skip the concurrency check. A mismatch → 409.
+  version: z.number().int().min(0),
 });
 
 export const listTasksQuerySchema = paginationSchema.extend({

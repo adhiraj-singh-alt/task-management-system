@@ -114,6 +114,9 @@ model Task {
   completedAt DateTime?    @map("completed_at")
   // Flexible, arbitrary structured data without schema changes.
   metadata    Json         @default("{}") @db.JsonB
+  // Optimistic-locking counter: bumped on every accepted update so a stale
+  // write (client's version != current) is rejected. Distinct from updatedAt.
+  version     Int          @default(0)
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
 

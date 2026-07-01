@@ -44,6 +44,8 @@ export interface Task {
   dueDate: string | null;
   completedAt: string | null;
   metadata: Record<string, unknown>;
+  // Optimistic-lock counter. Echo it back on update; a stale value → 409.
+  version: number;
   createdAt: string;
   updatedAt: string;
   category: Pick<Category, "id" | "name" | "color"> | null;

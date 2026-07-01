@@ -4,8 +4,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import type { Category, Tag, Task } from "@/lib/types";
-import { apiErrorMessage } from "@/lib/api";
+import { apiErrorCode, apiErrorMessage } from "@/lib/api";
 import { PRIORITY_OPTIONS, STATUS_OPTIONS } from "./constants";
 import {
   useAssignableUsers,
@@ -73,6 +74,7 @@ export function TaskFormDialog({
   const isSubtaskCreate = !isEdit && Boolean(defaultParentId);
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
+  const qc = useQueryClient();
   const { user } = useAuth();
 
   // Only the task's owner (or an ADMIN) may assign it. On create, the acting
@@ -145,7 +147,7 @@ export function TaskFormDialog({
 
     try {
       if (task) {
-        await updateTask.mutateAsync({ id: task.id, input });
+        await updateTask.mutateAsync({ id: task.id, input, version: task.version });
         toast.success("Task updated");
       } else {
         await createTask.mutateAsync(input);
@@ -153,6 +155,15 @@ export function TaskFormDialog({
       }
       onOpenChange(false);
     } catch (err) {
+      // Optimistic-lock conflict: someone else edited this task since it loaded.
+      // Refetch so the list shows the latest, and close so the next edit starts
+      // from the current version instead of looping on the stale one.
+      if (apiErrorCode(err) === "TASK_VERSION_CONFLICT") {
+        void qc.invalidateQueries({ queryKey: ["tasks"] });
+        toast.error("This task was changed by someone else. It's been refreshed — reopen to edit.");
+        onOpenChange(false);
+        return;
+      }
       toast.error(apiErrorMessage(err, "Could not save task"));
     }
   };

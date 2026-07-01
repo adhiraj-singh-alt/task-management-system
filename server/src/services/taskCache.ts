@@ -45,10 +45,6 @@ export function taskListKey(scope: string, version: number, hash: string): strin
   return `tasks:list:${scope}:v${version}:${hash}`;
 }
 
-export function taskItemKey(scope: string, version: number, id: string): string {
-  return `tasks:item:${scope}:v${version}:${id}`;
-}
-
 /** Cache-aside for `task.service.list`. */
 export async function readThroughList<T>(
   user: AuthUser,
@@ -59,18 +55,6 @@ export async function readThroughList<T>(
   const version = await getVersion(ns);
   const key = taskListKey(scope, version, filterHash(q));
   return withCache(key, env.CACHE_TTL_SECONDS, loader, recordCacheOutcome(user.id, null));
-}
-
-/** Cache-aside for `task.service.getById`. */
-export async function readThroughItem<T>(
-  user: AuthUser,
-  id: string,
-  loader: () => Promise<T>,
-): Promise<T> {
-  const { scope, ns } = readScope(user);
-  const version = await getVersion(ns);
-  const key = taskItemKey(scope, version, id);
-  return withCache(key, env.CACHE_TTL_SECONDS, loader, recordCacheOutcome(user.id, id));
 }
 
 /**

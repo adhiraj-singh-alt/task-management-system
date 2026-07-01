@@ -99,8 +99,10 @@ export function useCreateTask() {
 export function useUpdateTask() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, input }: { id: string; input: TaskInput }) =>
-      api.patch<{ task: Task }>(`/tasks/${id}`, input).then((r) => r.data.task),
+    // `version` is the optimistic-lock guard: the value the client last read.
+    // The backend rejects a stale version with 409 TASK_VERSION_CONFLICT.
+    mutationFn: ({ id, input, version }: { id: string; input: TaskInput; version: number }) =>
+      api.patch<{ task: Task }>(`/tasks/${id}`, { ...input, version }).then((r) => r.data.task),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
   });
 }

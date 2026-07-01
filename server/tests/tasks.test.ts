@@ -141,7 +141,7 @@ describe("tasks + categories + tags + RBAC", () => {
     const res = await request(app)
       .patch(`${TASKS_PATH}/${taskId}`)
       .set(auth(tokenA))
-      .send({ status: "DONE" });
+      .send({ status: "DONE", version: 0 });
 
     expect(res.status).toBe(200);
     expect(res.body.task.status).toBe("DONE");
@@ -245,7 +245,7 @@ describe("task assignment", () => {
     const res = await request(app)
       .patch(`${TASKS_PATH}/${assignedTaskId}`)
       .set(auth(tokenB))
-      .send({ status: "DONE" });
+      .send({ status: "DONE", version: 0 });
     expect(res.status).toBe(200);
     expect(res.body.task.status).toBe("DONE");
   });
@@ -254,7 +254,7 @@ describe("task assignment", () => {
     const res = await request(app)
       .patch(`${TASKS_PATH}/${assignedTaskId}`)
       .set(auth(tokenB))
-      .send({ assignedToId: userBId });
+      .send({ assignedToId: userBId, version: 1 });
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("FORBIDDEN");
   });
@@ -275,7 +275,7 @@ describe("task assignment", () => {
     const res = await request(app)
       .patch(`${TASKS_PATH}/${assignedTaskId}`)
       .set(auth(tokenA))
-      .send({ assignedToId: null });
+      .send({ assignedToId: null, version: 1 });
     expect(res.status).toBe(200);
     expect(res.body.task.assignedToId).toBeNull();
     expect(res.body.task.assignedTo).toBeNull();
@@ -324,7 +324,7 @@ describe("subtasks", () => {
     const done = await request(app)
       .patch(`${TASKS_PATH}/${childId}`)
       .set(auth(tokenA))
-      .send({ status: "DONE" });
+      .send({ status: "DONE", version: 0 });
     expect(done.status).toBe(200);
 
     const res = await request(app).get(`${TASKS_PATH}/${parentId}`).set(auth(tokenA));
@@ -350,7 +350,7 @@ describe("subtasks", () => {
     const res = await request(app)
       .patch(`${TASKS_PATH}/${parentId}`)
       .set(auth(tokenA))
-      .send({ parentId: other.body.task.id });
+      .send({ parentId: other.body.task.id, version: 0 });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe("SUBTASK_NESTING_NOT_ALLOWED");
   });
@@ -372,7 +372,7 @@ describe("subtasks", () => {
     const res = await request(app)
       .patch(`${TASKS_PATH}/${c.body.task.id}`)
       .set(auth(tokenA))
-      .send({ parentId: null });
+      .send({ parentId: null, version: 0 });
     expect(res.status).toBe(200);
     expect(res.body.task.parentId).toBeNull();
   });
@@ -383,5 +383,73 @@ describe("subtasks", () => {
 
     const refetch = await request(app).get(`${TASKS_PATH}/${childId}`).set(auth(tokenA));
     expect(refetch.status).toBe(404);
+  });
+});
+
+describe("optimistic locking", () => {
+  let lockTaskId = "";
+
+  it("starts a new task at version 0", async () => {
+    const res = await request(app)
+      .post(TASKS_PATH)
+      .set(auth(tokenA))
+      .send({ title: "Lock me" });
+    expect(res.status).toBe(201);
+    expect(res.body.task.version).toBe(0);
+    lockTaskId = res.body.task.id;
+  });
+
+  it("requires a version on update (400 when omitted)", async () => {
+    const res = await request(app)
+      .patch(`${TASKS_PATH}/${lockTaskId}`)
+      .set(auth(tokenA))
+      .send({ title: "No version" });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("accepts an update with the current version and bumps it (200)", async () => {
+    const res = await request(app)
+      .patch(`${TASKS_PATH}/${lockTaskId}`)
+      .set(auth(tokenA))
+      .send({ title: "First edit", version: 0 });
+    expect(res.status).toBe(200);
+    expect(res.body.task.title).toBe("First edit");
+    expect(res.body.task.version).toBe(1);
+  });
+
+  it("rejects a stale update with the old version (409)", async () => {
+    const res = await request(app)
+      .patch(`${TASKS_PATH}/${lockTaskId}`)
+      .set(auth(tokenA))
+      .send({ title: "Stale edit", version: 0 });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("TASK_VERSION_CONFLICT");
+  });
+
+  it("does not apply the rejected stale write", async () => {
+    const res = await request(app).get(`${TASKS_PATH}/${lockTaskId}`).set(auth(tokenA));
+    expect(res.status).toBe(200);
+    expect(res.body.task.title).toBe("First edit");
+    expect(res.body.task.version).toBe(1);
+  });
+
+  it("lets the client resync to the new version and update again (200)", async () => {
+    const res = await request(app)
+      .patch(`${TASKS_PATH}/${lockTaskId}`)
+      .set(auth(tokenA))
+      .send({ title: "Second edit", version: 1 });
+    expect(res.status).toBe(200);
+    expect(res.body.task.version).toBe(2);
+  });
+
+  it("bumps the version even on a tags-only edit (200)", async () => {
+    const res = await request(app)
+      .patch(`${TASKS_PATH}/${lockTaskId}`)
+      .set(auth(tokenA))
+      .send({ tagIds: [tagId], version: 2 });
+    expect(res.status).toBe(200);
+    expect(res.body.task.tags).toEqual([{ id: tagId, name: tagName }]);
+    expect(res.body.task.version).toBe(3);
   });
 });

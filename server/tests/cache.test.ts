@@ -70,7 +70,7 @@ describe.skipIf(!process.env.REDIS_URL)(
       const created = await request(app)
         .post(TASKS_PATH)
         .set(auth(tokenUser))
-        .send({ title: "original" });
+        .send({ title: `${prefix} original` });
       taskId = created.body.task.id;
     });
 
@@ -80,43 +80,45 @@ describe.skipIf(!process.env.REDIS_URL)(
       await prisma.$disconnect();
     });
 
-    it("serves a stale cached read after a direct DB write (proves caching)", async () => {
+    /** Read the task list (scoped to our run via `search`) and pluck our row. */
+    const listTitle = async (token: string): Promise<string | undefined> => {
+      const res = await request(app).get(TASKS_PATH).query({ search: prefix }).set(auth(token));
+      const items = res.body.items as { id: string; title: string }[];
+      return items.find((t) => t.id === taskId)?.title;
+    };
+
+    it("serves a stale cached list read after a direct DB write (proves caching)", async () => {
       // Prime the cache.
-      const first = await request(app).get(`${TASKS_PATH}/${taskId}`).set(auth(tokenUser));
-      expect(first.body.task.title).toBe("original");
+      expect(await listTitle(tokenUser)).toBe(`${prefix} original`);
 
       // Mutate the row directly, bypassing the API — no invalidation fires.
-      await prisma.task.update({ where: { id: taskId }, data: { title: "changed-in-db" } });
+      await prisma.task.update({ where: { id: taskId }, data: { title: `${prefix} changed-in-db` } });
 
       // The cached value is still served.
-      const second = await request(app).get(`${TASKS_PATH}/${taskId}`).set(auth(tokenUser));
-      expect(second.body.task.title).toBe("original");
+      expect(await listTitle(tokenUser)).toBe(`${prefix} original`);
     });
 
     it("reflects the change after an API mutation invalidates the cache", async () => {
       const patch = await request(app)
         .patch(`${TASKS_PATH}/${taskId}`)
         .set(auth(tokenUser))
-        .send({ title: "via-api" });
+        .send({ title: `${prefix} via-api`, version: 0 });
       expect(patch.status).toBe(200);
 
-      const after = await request(app).get(`${TASKS_PATH}/${taskId}`).set(auth(tokenUser));
-      expect(after.body.task.title).toBe("via-api");
+      expect(await listTitle(tokenUser)).toBe(`${prefix} via-api`);
     });
 
     it("invalidates the ADMIN global view when a USER mutates (cross-tenant)", async () => {
       // Admin reads under the global namespace.
-      const adminFirst = await request(app).get(`${TASKS_PATH}/${taskId}`).set(auth(tokenAdmin));
-      expect(adminFirst.body.task.title).toBe("via-api");
+      expect(await listTitle(tokenAdmin)).toBe(`${prefix} via-api`);
 
       // A normal user's edit must bump the global counter too.
       await request(app)
         .patch(`${TASKS_PATH}/${taskId}`)
         .set(auth(tokenUser))
-        .send({ title: "user-edit" });
+        .send({ title: `${prefix} user-edit`, version: 1 });
 
-      const adminAfter = await request(app).get(`${TASKS_PATH}/${taskId}`).set(auth(tokenAdmin));
-      expect(adminAfter.body.task.title).toBe("user-edit");
+      expect(await listTitle(tokenAdmin)).toBe(`${prefix} user-edit`);
     });
   },
 );
